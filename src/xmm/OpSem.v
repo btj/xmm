@@ -33,12 +33,6 @@ Record atomic_spec := {
     post: op * option value → option (RG * RL);
 }.
 
-(* There is no allocation or deallocation; all locations have a value from the start.
-   But a location l is temporarily removed from the regular heap during a nonatomic write
-   and between a begin_atomic l and an end_atomic l. *)
-Definition heap := location → option value.
-Definition atomic_heap := location → option (atomic_spec * RT).
-
 Inductive event_origin :=
 | orig_simple (o: op)
 | orig_rmw_read (o: op) (w: option actid)
@@ -115,9 +109,9 @@ Record hb_consistent(S: atomic_spec)(l: location)(v: option value)(o: op)(ω: RT
         f v = None ∧ S.(post) (o, Some v) <> None;
     Horig_rmw_read_Some: ∀ a f rexmod xmod ordr ordw v0 v1 w,
         E a → orig a = orig_rmw_read (Ormw f rexmod xmod ordr ordw) (Some w) →
+        E w →
         val G.(lab) a = Some v0 →
         val G.(lab) w = Some v1 →
-        E w ∧
         orig w = orig_rmw_write (Ormw f rexmod xmod ordr ordw) a ∧
         f v0 = Some v1 ∧
         rmw G a w ∧
@@ -148,6 +142,12 @@ Record hb_consistent(S: atomic_spec)(l: location)(v: option value)(o: op)(ω: RT
 }.
 
 From imm Require Import ProgToExecution.
+
+(* There is no allocation or deallocation; all locations have a value from the start.
+   But a location l is temporarily removed from the regular heap during a nonatomic write
+   and between a begin_atomic l and an end_atomic l. *)
+Definition heap := location → option value.
+Definition atomic_heap := location → option (atomic_spec * RT).
 
 Inductive opsem_pc :=
 | AboutToExecute (pc:nat)
