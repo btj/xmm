@@ -17,5 +17,6 @@
     "nixEnvSelector.nixFile": "${workspaceFolder}/default.nix",
     "vscoq.args": [
         "-R", "src", "xmm"
-    ]
+    ],
+    "makefile.configureOnOpen": false
 }
