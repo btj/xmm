@@ -36,7 +36,7 @@ Record atomic_spec := {
 Inductive event_origin :=
 | orig_simple (o: op)
 | orig_rmw_read (o: op) (w: option actid)
-| orig_rmw_write (o: op) (r: actid)
+| orig_rmw_write (o: op) (r: actid) (vr: value)
 .
 
 Inductive label_matches_origin: label → event_origin → Prop :=
@@ -48,14 +48,15 @@ Inductive label_matches_origin: label → event_origin → Prop :=
     label_matches_origin (Afence o) (orig_simple (Ofence o))
 | load_matches_orig_rmw_read f rexmod xmod ordr ordw l v w:
     label_matches_origin (Aload rexmod ordr l v) (orig_rmw_read (Ormw f rexmod xmod ordr ordw) w)
-| store_matches_orig_rmw_write f rexmod xmod ordr ordw l v r:
-    label_matches_origin (Astore xmod ordw l v) (orig_rmw_write (Ormw f rexmod xmod ordr ordw) r)
+| store_matches_orig_rmw_write f rexmod xmod ordr ordw l v r vr:
+    label_matches_origin (Astore xmod ordw l v) (orig_rmw_write (Ormw f rexmod xmod ordr ordw) r vr)
 .
 
 Definition ops_of_event(t: thread_id)(orig: event_origin)(v: option value): list (thread_id * (op * option value)) :=
     match orig with
-    | orig_simple o | orig_rmw_read o _ => [(t, (o, v))]
-    | orig_rmw_write _ _ => []
+    | orig_simple o => [(t, (o, v))]
+    | orig_rmw_read _ _ => []
+    | orig_rmw_write o _ vr => [(t, (o, Some vr))]
     end.
 
 Fixpoint run(S: atomic_spec)(ω0: RT)(es: list (thread_id * (op * option value))): option RT :=
@@ -82,15 +83,15 @@ Fixpoint run(S: atomic_spec)(ω0: RT)(es: list (thread_id * (op * option value))
 Record hb_consistent(S: atomic_spec)(l: location)(v: option value)(o: op)(ω: RT) :=
 {
     G: execution;
-    HGWf: Wf G;
-    HGcons: WCore.is_cons G;
+    HG_Wf: Wf G;
+    HG_cons: WCore.is_cons G;
 
     init: actid;
     Hinit_acts: G.(acts_set) init;
     Hinit_loc: loc G.(lab) init = Some l;
     Hinit_is_w: is_w G.(lab) init;
     Hinit_mod: mod G.(lab) init = Opln;
-    Hint_val: val G.(lab) init = Some S.(v0);
+    Hinit_val: val G.(lab) init = Some S.(v0);
 
     E: actid → Prop;
     HE_acts: E ⊆₁ G.(acts_set);
@@ -112,26 +113,26 @@ Record hb_consistent(S: atomic_spec)(l: location)(v: option value)(o: op)(ω: RT
         E w →
         val G.(lab) a = Some v0 →
         val G.(lab) w = Some v1 →
-        orig w = orig_rmw_write (Ormw f rexmod xmod ordr ordw) a ∧
+        orig w = orig_rmw_write (Ormw f rexmod xmod ordr ordw) a v0 ∧
         f v0 = Some v1 ∧
         rmw G a w ∧
         S.(post) (o, Some v0) <> None;
-    Horig_rmw_write: ∀ a f rexmod xmod ordr ordw r,
-        E a → orig a = orig_rmw_write (Ormw f rexmod xmod ordr ordw) r →
+    Horig_rmw_write: ∀ a f rexmod xmod ordr ordw r vr,
+        E a → orig a = orig_rmw_write (Ormw f rexmod xmod ordr ordw) r vr →
         E r ∧
         orig r = orig_rmw_read (Ormw f rexmod xmod ordr ordw) (Some a) ∧
         rmw G r a;
 
     e: actid;
     HE_e: E e;
-    He_val: val G.(lab) e = v;
-    He_orig: orig e = orig_simple o ∨ ∃ w, orig e = orig_rmw_read o w;
+    He_orig: orig e = orig_simple o ∧ val G.(lab) e = v ∨ ∃ r vr, orig e = orig_rmw_write o r vr /\ v = Some vr;
 
     E': actid → Prop;
     HE'_acts: E' ⊆₁ E;
     HE'_hb1: ∀a, E a → hb G a e → E' a;
     HE'_e: ¬ E' e;
     HE'_hb2: ∀ a, E a → hb G e a → ¬ E' a;
+
     Homega: ∀ es f,
         (* es contains each element of E' exactly once *)
         (∀ a, E' a → nth_error es (f a) = Some a) →
