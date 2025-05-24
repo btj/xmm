@@ -6,17 +6,31 @@ Bart Jacobs and Justus Fasse. An approach for modularly verifying the core of Ru
 
 *)
 
-From hahn Require Import Hahn.
-From hahnExt Require Import HahnExt.
-From imm Require Import Events Execution.
-Require Import Core.
-Require Import Utf8.
-Require Import xmm_s_hb.
+From hahn Require Export Hahn.
+From hahnExt Require Export HahnExt.
+From imm Require Export Events Execution.
+Require Export Core.
+Require Export Utf8.
+Require Export xmm_s_hb.
+
+Inductive f_rmw :=
+| Ofetch_add (addendum: value)
+| Ocas (old: value) (new: value)
+| Oexchange (new: value)
+.
+
+Definition eval_f_rmw (f: f_rmw) (v: value): option value :=
+    match f with
+    | Ofetch_add addendum => Some (v + addendum)
+    | Ocas old new =>
+        if Nat.eqb v old then Some new else None
+    | Oexchange new => Some new
+    end.
 
 Inductive op :=
 | Oload (ord:mode)
 | Ostore (ord:mode) (val: value)
-| Ormw (f: value → option value) (rexmod:bool) (xmod:x_mode) (ordr ordw:mode)
+| Ormw (f: f_rmw) (rexmod:bool) (xmod:x_mode) (ordr ordw:mode)
 | Ofence (ord:mode)
 .
 
@@ -26,11 +40,13 @@ Definition RL := nat.
 Definition RB := thread_id → RL.
 Definition RT: Type := RG * RB.
 
+Definition O_RB: RB := λ _, 0.
+
 Record atomic_spec := {
     v0: value;
     ρ0: RG;
     pre: op → option (RG * RL);
-    post: op * option value → option (RG * RL);
+    post: op → option value → option (RG * RL);
 }.
 
 Inductive event_origin :=
@@ -55,32 +71,33 @@ Inductive label_matches_origin: label → event_origin → Prop :=
 Definition ops_of_event(t: thread_id)(orig: event_origin)(v: option value): list (thread_id * (op * option value)) :=
     match orig with
     | orig_simple o => [(t, (o, v))]
+    | orig_rmw_read o None => [(t, (o, v))]
     | orig_rmw_read _ _ => []
     | orig_rmw_write o _ vr => [(t, (o, Some vr))]
     end.
 
-Fixpoint run(S: atomic_spec)(ω0: RT)(es: list (thread_id * (op * option value))): option RT :=
+Fixpoint run(Σ: atomic_spec)(ω0: RT)(es: list (thread_id * (op * option value))): option RT :=
     match es with
     | [] => Some ω0
     | (t, (o, v)) :: es' =>
-        match S.(pre) o with
+        match Σ.(pre) o with
         | None => None
         | Some (ρ, θ) =>
             let (ρ0, Θ0) := ω0 in
             if negb (Nat.leb ρ ρ0 && Nat.leb θ (Θ0 t)) then
                 None
             else
-            match S.(post) (o, v) with
+            match Σ.(post) o v with
             | None => None
             | Some (ρ', θ') =>
                 let ρ' := ρ0 - ρ + ρ' in
                 let Θ' := upd Θ0 t (Θ0 t - θ + θ') in
-                run S (ρ', Θ') es'
+                run Σ (ρ', Θ') es'
             end
         end
     end.
 
-Record hb_consistent(S: atomic_spec)(l: location)(v: option value)(o: op)(ω: RT) :=
+Record hb_consistent(Σ: atomic_spec)(l: location)(v: option value)(o: op)(ω: RT) :=
 {
     G: execution;
     HG_Wf: Wf G;
@@ -91,7 +108,7 @@ Record hb_consistent(S: atomic_spec)(l: location)(v: option value)(o: op)(ω: RT
     Hinit_loc: loc G.(lab) init = Some l;
     Hinit_is_w: is_w G.(lab) init;
     Hinit_mod: mod G.(lab) init = Opln;
-    Hinit_val: val G.(lab) init = Some S.(v0);
+    Hinit_val: val G.(lab) init = Some Σ.(v0);
 
     E: actid → Prop;
     HE_acts: E ⊆₁ G.(acts_set);
@@ -103,29 +120,32 @@ Record hb_consistent(S: atomic_spec)(l: location)(v: option value)(o: op)(ω: RT
     Hlab_matches_orig: ∀ a, E a → label_matches_origin (G.(lab) a) (orig a);
     Horig_simple: ∀ a o,
         E a → orig a = orig_simple o →
-        S.(post) (o, val G.(lab) a) <> None;
+        Σ.(post) o (val G.(lab) a) <> None;
     Horig_rmw_read_None: ∀ a f rexmod xmod ordr ordw v,
         E a → orig a = orig_rmw_read (Ormw f rexmod xmod ordr ordw) None →
         val G.(lab) a = Some v →
-        f v = None ∧ S.(post) (o, Some v) <> None;
+        eval_f_rmw f v = None ∧
+        Σ.(post) (Ormw f rexmod xmod ordr ordw) (Some v) <> None;
     Horig_rmw_read_Some: ∀ a f rexmod xmod ordr ordw v0 v1 w,
         E a → orig a = orig_rmw_read (Ormw f rexmod xmod ordr ordw) (Some w) →
         E w →
         val G.(lab) a = Some v0 →
         val G.(lab) w = Some v1 →
         orig w = orig_rmw_write (Ormw f rexmod xmod ordr ordw) a v0 ∧
-        f v0 = Some v1 ∧
-        rmw G a w ∧
-        S.(post) (o, Some v0) <> None;
+        eval_f_rmw f v0 = Some v1 ∧
+        rmw G a w;
     Horig_rmw_write: ∀ a f rexmod xmod ordr ordw r vr,
         E a → orig a = orig_rmw_write (Ormw f rexmod xmod ordr ordw) r vr →
         E r ∧
         orig r = orig_rmw_read (Ormw f rexmod xmod ordr ordw) (Some a) ∧
-        rmw G r a;
+        rmw G r a ∧
+        Σ.(post) (Ormw f rexmod xmod ordr ordw) (Some vr) <> None;
 
     e: actid;
     HE_e: E e;
-    He_orig: orig e = orig_simple o ∧ val G.(lab) e = v ∨ ∃ r vr, orig e = orig_rmw_write o r vr /\ v = Some vr;
+    He_orig:
+        (orig e = orig_simple o ∨ orig e = orig_rmw_read o None) ∧ v = val G.(lab) e ∨
+        ∃ r vr, orig e = orig_rmw_write o r vr /\ v = Some vr;
 
     E': actid → Prop;
     HE'_acts: E' ⊆₁ E;
@@ -139,7 +159,7 @@ Record hb_consistent(S: atomic_spec)(l: location)(v: option value)(o: op)(ω: RT
         (∀ k a, nth_error es k = Some a → E' a /\ f a = k) →
         (* the order is consistent with hb *)
         (∀ a b, E' a → E' b → hb G a b → f a < f b) →
-        run S (S.(ρ0), λ _, 0) (flat_map (λ a, ops_of_event (tid a) (orig a) (val G.(lab) a)) es) = Some ω;
+        run Σ (Σ.(ρ0), O_RB) (flat_map (λ a, ops_of_event (tid a) (orig a) (val G.(lab) a)) es) = Some ω;
 }.
 
 From imm Require Import ProgToExecution.
