@@ -1,6 +1,8 @@
 Require Import OpSem.
 Require Import Utf8.
 
+(* The IMM programming language does not have fetch_and_sub, so we use a CAS to decrement the counter. *)
+
 Definition pre_arc(o: op) :=
     match o with
     | Ormw (Ofetch_add 1) false Xpln Orlx Orlx => Some (1, 0)
@@ -22,8 +24,9 @@ Definition post_arc o v :=
       if Nat.eqb v0 (S v1) then
         match v with
         | Some 0 => None
-        | Some 1 => Some (0, 1)
-        | Some _ => Some (0, 0)
+        | Some v =>
+          if Nat.eqb v v0 then if Nat.eqb v0 1 then Some (0, 1) else Some (0, 0)
+          else Some (1, 0) (* A failed CAS simply returns the unit of global tied resource *)
         | None => None
         end
       else
@@ -38,3 +41,15 @@ Definition Σ_arc: atomic_spec := {|
     pre := pre_arc;
     post := post_arc;
 |}.
+
+Lemma arc_dec_reading_1_unique l ρ Θ:
+  hb_consistent Σ_arc l (Some 1) (Ormw (Ocas 1 0) false Xpln Orlx Orel) (ρ, Θ) →
+  Θ = O_RB.
+Proof.
+Admitted.
+
+Lemma arc_fence_no_global_resources l ρ Θ:
+  hb_consistent Σ_arc l None (Ofence Oacq) (ρ, Θ) →
+  ρ = 0.
+Proof.
+Admitted.
