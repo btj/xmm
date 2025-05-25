@@ -102,6 +102,7 @@ Record hb_consistent(Σ: atomic_spec)(l: location)(v: option value)(o: op)(ω: R
     G: execution;
     HG_Wf: Wf G;
     HG_cons: WCore.is_cons G;
+    HG_rf_complete: complete G;
 
     init: actid;
     Hinit_acts: G.(acts_set) init;
@@ -113,8 +114,11 @@ Record hb_consistent(Σ: atomic_spec)(l: location)(v: option value)(o: op)(ω: R
     E: actid → Prop;
     HE_acts: E ⊆₁ G.(acts_set);
     HE_loc: ∀ a, E a → loc G.(lab) a = None ∨ loc G.(lab) a = Some l;
-    HE_sb_init: ∀ a, E a → hb G init a;
+    HE_hb_init: ∀ a, E a → hb G init a;
     HE_rf_complete: ∀ a b, E b → rf G a b → a = init ∨ E a;
+
+    co_rank: actid -> nat;
+    Hco_rank_co: ∀ a1 a2, E a1 → E a2 → co G a1 a2 → co_rank a1 < co_rank a2;
 
     orig: actid → event_origin;
     Hlab_matches_orig: ∀ a, E a → label_matches_origin (G.(lab) a) (orig a);
@@ -122,12 +126,14 @@ Record hb_consistent(Σ: atomic_spec)(l: location)(v: option value)(o: op)(ω: R
         E a → orig a = orig_simple o →
         Σ.(post) o (val G.(lab) a) <> None;
     Horig_rmw_read_None: ∀ a f rexmod xmod ordr ordw v,
-        E a → orig a = orig_rmw_read (Ormw f rexmod xmod ordr ordw) None →
+        orig a = orig_rmw_read (Ormw f rexmod xmod ordr ordw) None →
+        E a →
         val G.(lab) a = Some v →
         eval_f_rmw f v = None ∧
         Σ.(post) (Ormw f rexmod xmod ordr ordw) (Some v) <> None;
     Horig_rmw_read_Some: ∀ a f rexmod xmod ordr ordw v0 v1 w,
-        E a → orig a = orig_rmw_read (Ormw f rexmod xmod ordr ordw) (Some w) →
+        orig a = orig_rmw_read (Ormw f rexmod xmod ordr ordw) (Some w) →
+        E a →
         E w →
         val G.(lab) a = Some v0 →
         val G.(lab) w = Some v1 →
@@ -135,7 +141,8 @@ Record hb_consistent(Σ: atomic_spec)(l: location)(v: option value)(o: op)(ω: R
         eval_f_rmw f v0 = Some v1 ∧
         rmw G a w;
     Horig_rmw_write: ∀ a f rexmod xmod ordr ordw r vr,
-        E a → orig a = orig_rmw_write (Ormw f rexmod xmod ordr ordw) r vr →
+        orig a = orig_rmw_write (Ormw f rexmod xmod ordr ordw) r vr →
+        E a →
         E r ∧
         orig r = orig_rmw_read (Ormw f rexmod xmod ordr ordw) (Some a) ∧
         rmw G r a ∧
