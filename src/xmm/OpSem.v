@@ -686,7 +686,7 @@ Definition prog_has_xc20_execution (G: execution): Prop :=
   ∃ threads sc0 sc',
     (xmm_step_trace is_thread_trace)^* {| WCore.G:=WCore.init_exec threads; WCore.sc:=sc0 |} {| WCore.G:=G; WCore.sc:=sc' |}.
 
-Definition is_race G a1 a2 := race_mod G Opln a1 a2.
+Definition is_race G a1 a2 := a1 ≠ a2 ∧ race_mod G Opln a1 a2.
 
 Theorem safe_programs_have_no_races:
   ∀ G,
