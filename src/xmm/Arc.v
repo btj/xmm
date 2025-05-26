@@ -8,7 +8,7 @@ Definition pre_arc(o: op) :=
     | Ormw (Ofetch_add 1) false Xpln Orlx Orlx => Some (1, 0)
     | Ormw (Ocas v0 v1) false Xpln Orlx Orel =>
       if Nat.eqb v0 (S v1) then Some (1, 0) else None
-    | Ofence Oacq => Some (0, 1)
+    | Ofence _ => Some (0, 0)
     | _ => None
     end.
 
@@ -31,7 +31,7 @@ Definition post_arc o v :=
         end
       else
         None
-    | Ofence Oacq => match v with None => Some (0, 1) | Some _ => None end
+    | Ofence _ => match v with None => Some (0, 0) | Some _ => None end
     | _ => None
     end.
 
@@ -45,8 +45,8 @@ Inductive post_arc_: op -> option value -> RG * RL -> Prop :=
 | post_arc_cas_fail n m:
     m <> n →
     post_arc_ (Ormw (Ocas (S n) n) false Xpln Orlx Orel) (Some (S m)) (1, 0)
-| post_arc_fence:
-    post_arc_ (Ofence Oacq) None (0, 1)
+| post_arc_fence mod:
+    post_arc_ (Ofence mod) None (0, 0)
 .
 
 Lemma post_arc__sound o v ρ:
@@ -99,9 +99,9 @@ Proof.
         apply post_arc_cas_fail.
         apply PeanoNat.Nat.eqb_neq in H0.
         congruence.
-  - destruct ord; try discriminate.
-    destruct v; try discriminate.
-    injection H; clear H; intros; subst.
+  - destruct ord; try discriminate;
+    destruct v; try discriminate;
+    injection H; clear H; intros; subst;
     apply post_arc_fence.
 Qed.
 
@@ -152,7 +152,11 @@ Proof.
   destruct Ha as [Hlab Horig].
   inversion Hlab; subst; rewrite <- H in Hrun; try discriminate; simpl in Hrun.
   - (* fence *)
-    destruct o; try discriminate.
+    destruct o; try discriminate;
+    unfold val in Hrun;
+    rewrite <- H0 in Hrun;
+    rewrite upd_O_RB_0 in Hrun;
+    apply IHes with (1:=Hfor) (2:=Hrun).
   - (* rmw read *)
     destruct w; try discriminate.
     + (* successful rmw *)
@@ -229,8 +233,8 @@ Proof.
            apply IHes with (1:=Hfor) (2:=Hrun).
 Qed.
 
-Lemma arc_dec_reading_1_unique l ρ Θ:
-  hb_consistent Σ_arc l (Some 1) (Ormw (Ocas 1 0) false Xpln Orlx Orel) (ρ, Θ) →
+Lemma arc_dec_reading_1_unique t l ρ Θ:
+  hb_consistent Σ_arc t l (Some 1) (Ormw (Ocas 1 0) false Xpln Orlx Orel) (ρ, Θ) →
   Θ = O_RB.
 Proof.
   intro Hhb_consistent.
@@ -694,8 +698,9 @@ Proof.
   - apply Homega with (f:=f_es'0); assumption.
 Qed.
 
-Lemma arc_fence_no_global_resources l ρ Θ:
-  hb_consistent Σ_arc l None (Ofence Oacq) (ρ, Θ) →
+Lemma arc_fence_no_global_resources t l ρ Θ:
+  hb_consistent Σ_arc t l None (Ofence Oacq) (ρ, Θ) →
+  Θ t ≠ 0 →
   ρ = 0.
 Proof.
 Admitted.

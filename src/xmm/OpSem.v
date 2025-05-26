@@ -42,6 +42,11 @@ Definition RT: Type := RG * RB.
 
 Definition O_RB: RB := λ _, 0.
 
+Definition compose (ω1 ω2: RT): RT :=
+    let (ρ1, Θ1) := ω1 in
+    let (ρ2, Θ2) := ω2 in
+    (ρ1 + ρ2, λ t, Θ1 t + Θ2 t).
+
 Record atomic_spec := {
     v0: value;
     ρ0: RG;
@@ -98,7 +103,7 @@ Fixpoint run(Σ: atomic_spec)(ω0: RT)(es: list (thread_id * (op * option value)
         end
     end.
 
-Record hb_consistent(Σ: atomic_spec)(l: location)(v: option value)(o: op)(ω: RT) :=
+Record hb_consistent(Σ: atomic_spec)(t: thread_id)(l: location)(v: option value)(o: op)(ω: RT) :=
 {
     G: execution;
     HG_Wf: Wf G;
@@ -152,6 +157,7 @@ Record hb_consistent(Σ: atomic_spec)(l: location)(v: option value)(o: op)(ω: R
 
     e: actid;
     HE_e: E e;
+    He_tid: tid e = t;
     He_orig:
         (orig e = orig_simple o ∨ orig e = orig_rmw_read o None) ∧ v = val G.(lab) e ∨
         ∃ r vr, orig e = orig_rmw_write o r vr ∧ v = Some vr;
@@ -183,6 +189,14 @@ Record hb_consistent(Σ: atomic_spec)(l: location)(v: option value)(o: op)(ω: R
         run Σ (Σ.(ρ0), O_RB) (flat_map (λ a, ops_of_event (tid a) (orig a) (val G.(lab) a)) es) = Some ω;
 }.
 
+Definition atomic_spec_pre_sufficient (Σ: atomic_spec)(o: op): Prop :=
+  False. (* TODO: Weaken. For now, we consider programs with plain accesses only. *)
+
+Definition is_valid_atomic_spec (Σ: atomic_spec): Prop :=
+  (∀ mod, Σ.(pre) (Ofence mod) = Some (0, 0)) ∧
+  (∀ mod, Σ.(post) (Ofence mod) None = Some (0, 0)) ∧
+  ∀ o, atomic_spec_pre_sufficient Σ o.
+
 From imm Require Import ProgToExecution.
 
 (* There is no allocation or deallocation; all locations have a value from the start.
@@ -190,11 +204,15 @@ From imm Require Import ProgToExecution.
    and between a begin_atomic l and an end_atomic l. *)
 Definition heap := location → option value.
 Definition atomic_heap := location → option (atomic_spec * RT).
-Definition state: Type := heap * atomic_heap.
+Record state := {
+    h: heap;
+    A: atomic_heap
+}.
 
-Definition h_init: heap := λ _, Some 0.
-Definition a_init: atomic_heap := λ _, None.
-Definition σ_init := (h_init, a_init).
+Definition with_heap (σ: state)(h': heap): state :=
+  {| h := h'; A := σ.(A) |}.
+Definition with_atomic_heap (σ: state)(A': atomic_heap): state :=
+  {| h := σ.(h); A := A' |}.
 
 Inductive opsem_pc :=
 | AboutToExecute (pc:nat)
@@ -214,9 +232,6 @@ Record cfg := {
     T : thread_id → thread_cfg;
 }.
 
-Definition γ_init := 
-  {| σ := σ_init; T := fun t => tcfg_init |}.
-
 Section Prog.
 
 Variable prog: Prog.Prog.t.
@@ -225,6 +240,43 @@ Definition instr t pc :=
   match Basic.IdentMap.find t prog with
   | Some instrs => nth_error instrs pc
   | None => None
+  end.
+
+Inductive annotation :=
+| NoAnnotation
+| BeginAtomic(Σ: atomic_spec)
+| EndAtomic
+.
+
+Variable init_annot: location → annotation.
+Variable instr_annot: thread_id → nat → annotation.
+
+Hypothesis init_annot_valid:
+  ∀ l, match init_annot l with
+    BeginAtomic Σ => is_valid_atomic_spec Σ ∧ Σ.(v0) = 0
+  | _ => True
+  end.
+Hypothesis instr_annot_valid:
+  ∀ t pc, match instr_annot t pc with
+    NoAnnotation => True
+  | BeginAtomic Σ => is_valid_atomic_spec Σ
+  | EndAtomic => True
+  end.
+
+(* The initial state of the program. *)
+
+Definition h_init: heap := λ l, match init_annot l with BeginAtomic Σ => None | _ => Some 0 end.
+Definition A_init: atomic_heap := λ l, match init_annot l with BeginAtomic Σ => Some (Σ, (Σ.(ρ0), O_RB)) | _ => None end.
+Definition σ_init := {| h:=h_init; A:=A_init |}.
+
+Definition γ_init := 
+  {| σ := σ_init; T := fun t => tcfg_init |}.
+
+Definition eval_rmw(regf: RegFile.t)(rmw: Prog.Instr.rmw): f_rmw :=
+  match rmw with
+  | Prog.Instr.fetch_add addendum => Ofetch_add (RegFile.eval_expr regf addendum)
+  | Prog.Instr.cas old new => Ocas (RegFile.eval_expr regf old) (RegFile.eval_expr regf new)
+  | Prog.Instr.exchange new => Oexchange (RegFile.eval_expr regf new)
   end.
 
 Inductive tstep: state → thread_cfg → thread_id → state → thread_cfg → Prop :=
@@ -255,6 +307,155 @@ Inductive tstep: state → thread_cfg → thread_id → state → thread_cfg →
       {|
         regf:=regf;
         pc:=AboutToExecute (if Prog.Const.eq_dec (RegFile.eval_expr regf cond) 0 then S pc else pc')
+      |}
+| tstep_load_pln σ regf pc t lhs l v:
+    instr t pc = Some (Prog.Instr.load Opln lhs l) →
+    σ.(h) (RegFile.eval_lexpr regf l) = Some v →
+    tstep
+      σ
+      {|
+        regf:=regf;
+        pc:=AboutToExecute pc
+      |}
+      t
+      σ
+      {|
+        regf:=Prog.RegFun.add lhs v regf;
+        pc:=AboutToExecute (S pc)
+      |}
+| tstep_store_pln σ regf pc t l rhs v0:
+    instr_annot t pc = NoAnnotation →
+    instr t pc = Some (Prog.Instr.store Opln l rhs) →
+    σ.(h) (RegFile.eval_lexpr regf l) = Some v0 →
+    tstep
+      σ
+      {|
+        regf:=regf;
+        pc:=AboutToExecute pc
+      |}
+      t
+      (with_heap σ (upd σ.(h) (RegFile.eval_lexpr regf l) None))
+      {|
+        regf:=regf;
+        pc:=Executing pc
+      |}
+| tstep_store_pln' σ regf pc t l rhs:
+    instr t pc = Some (Prog.Instr.store Opln l rhs) →
+    tstep
+      σ
+      {|
+        regf:=regf;
+        pc:=Executing pc
+      |}
+      t
+      (with_heap σ (upd σ.(h) (RegFile.eval_lexpr regf l) (Some (RegFile.eval_expr regf rhs))))
+      {|
+        regf:=regf;
+        pc:=AboutToExecute (S pc)
+      |}
+| tstep_begin_atomic σ regf pc t Σ l rhs v_0:
+    instr_annot t pc = BeginAtomic Σ →
+    instr t pc = Some (Prog.Instr.store Opln l rhs) →
+    σ.(h) (RegFile.eval_lexpr regf l) = Some v_0 →
+    Σ.(v0) = RegFile.eval_expr regf rhs →
+    tstep
+      σ
+      {|
+        regf:=regf;
+        pc:=AboutToExecute pc
+      |}
+      t
+      {|
+        h:=upd σ.(h) (RegFile.eval_lexpr regf l) None;
+        A:=upd σ.(A) (RegFile.eval_lexpr regf l) (Some (Σ, (Σ.(ρ0), O_RB)))
+      |}
+      {|
+        regf:=regf;
+        pc:=AboutToExecute (S pc)
+      |}
+| tstep_end_atomic σ regf pc t l rhs Σ ω:
+    instr_annot t pc = EndAtomic →
+    instr t pc = Some (Prog.Instr.store Opln l rhs) →
+    σ.(A) (RegFile.eval_lexpr regf l) = Some (Σ, ω) →
+    tstep
+      σ
+      {|
+        regf:=regf;
+        pc:=AboutToExecute pc
+      |}
+      t
+      {|
+        h:=upd σ.(h) (RegFile.eval_lexpr regf l) (Some (RegFile.eval_expr regf rhs));
+        A:=upd σ.(A) (RegFile.eval_lexpr regf l) None
+      |}
+      {|
+        regf:=regf;
+        pc:=AboutToExecute (S pc)
+      |}
+| tstep_rmw_stutter σ regf pc t rmw rexmod xmod ordr ordw lhs l Σ ω ρ_pre θ_pre ω_frame:
+    instr t pc = Some (Prog.Instr.update rmw rexmod xmod ordr ordw lhs l) →
+    σ.(A) (RegFile.eval_lexpr regf l) = Some (Σ, ω) →
+    Σ.(pre) (Ormw (eval_rmw regf rmw) rexmod xmod ordr ordw) = Some (ρ_pre, θ_pre) →
+    ω = compose ω_frame (ρ_pre, upd O_RB t θ_pre) →
+    tstep
+      σ
+      {|
+        regf:=regf;
+        pc:=AboutToExecute pc
+      |}
+      t
+      σ
+      {|
+        regf:=regf;
+        pc:=AboutToExecute pc
+      |}
+| tstep_rmw σ regf pc t rmw rexmod xmod ordr ordw lhs l Σ ω ρ_pre θ_pre ω_frame v ρ_post θ_post:
+    instr t pc = Some (Prog.Instr.update rmw rexmod xmod ordr ordw lhs l) →
+    σ.(A) (RegFile.eval_lexpr regf l) = Some (Σ, ω) →
+    Σ.(pre) (Ormw (eval_rmw regf rmw) rexmod xmod ordr ordw) = Some (ρ_pre, θ_pre) →
+    ω = compose ω_frame (ρ_pre, upd O_RB t θ_pre) →
+    Σ.(post) (Ormw (eval_rmw regf rmw) rexmod xmod ordr ordw) (Some v) = Some (ρ_post, θ_post) →
+    hb_consistent Σ t (RegFile.eval_lexpr regf l) (Some v) (Ormw (eval_rmw regf rmw) rexmod xmod ordr ordw) ω →
+    tstep
+      σ
+      {|
+        regf:=regf;
+        pc:=AboutToExecute pc
+      |}
+      t
+      (with_atomic_heap σ (upd σ.(A) (RegFile.eval_lexpr regf l) (Some (Σ, compose ω_frame (ρ_post, upd O_RB t θ_post)))))
+      {|
+        regf:=Prog.RegFun.add lhs v regf;
+        pc:=AboutToExecute (S pc)
+      |}
+| tstep_fence_stutter σ regf pc t ord:
+    instr t pc = Some (Prog.Instr.fence ord) →
+    tstep
+      σ
+      {|
+        regf:=regf;
+        pc:=AboutToExecute pc
+      |}
+      t
+      σ
+      {|
+        regf:=regf;
+        pc:=AboutToExecute pc
+      |}
+| tstep_fence σ regf pc t ord:
+    instr t pc = Some (Prog.Instr.fence ord) →
+    (∀ l Σ ω, σ.(A) l = Some (Σ, ω) → hb_consistent Σ t l None (Ofence ord) ω) →
+    tstep
+      σ
+      {|
+        regf:=regf;
+        pc:=AboutToExecute pc
+      |}
+      t
+      σ
+      {|
+        regf:=regf;
+        pc:=AboutToExecute (S pc)
       |}
 .
 
