@@ -62,7 +62,8 @@ Inductive label_matches_origin: label → event_origin → Prop :=
     label_matches_origin (Astore Xpln o l v) (orig_simple (Ostore o v))
 | fence_matches_orig_simple o:
     label_matches_origin (Afence o) (orig_simple (Ofence o))
-| load_matches_orig_rmw_read f rexmod xmod ordr ordw l v w:
+| load_matches_orig_rmw_read f rexmod xmod ordr ordw l v w
+    (Hrmw_read_None: w = None ↔ eval_f_rmw f v = None):
     label_matches_origin (Aload rexmod ordr l v) (orig_rmw_read (Ormw f rexmod xmod ordr ordw) w)
 | store_matches_orig_rmw_write f rexmod xmod ordr ordw l v r vr:
     label_matches_origin (Astore xmod ordw l v) (orig_rmw_write (Ormw f rexmod xmod ordr ordw) r vr)
