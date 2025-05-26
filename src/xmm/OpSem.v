@@ -254,7 +254,7 @@ Record grounding_consistent(Σ: atomic_spec)(t: thread_id)(l: location)(v: optio
     E': actid → Prop;
     HE'_acts: E' ⊆₁ E;
     HE'_hb1: ∀a, E a → hb G a e → E' a;
-    HE'_rel: ∀a, E a → is_rel G.(lab) a → E' a;
+    HE'_rel: ∀a, E a → a ≠ e → is_rel G.(lab) a → E' a;
     HE'_e: ¬ E' e;
     HE'_hb2: ∀ a, E a → hb G e a → ¬ E' a;
 
