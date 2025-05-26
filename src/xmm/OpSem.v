@@ -117,6 +117,7 @@ Record hb_consistent(Σ: atomic_spec)(l: location)(v: option value)(o: op)(ω: R
     HE_hb_init: ∀ a, E a → hb G init a;
     HE_rf_complete: ∀ a b, E b → rf G a b → a = init ∨ E a;
 
+    (* Expresses well-foundedness of co within E *)
     co_rank: actid -> nat;
     Hco_rank_co: ∀ a1 a2, E a1 → E a2 → co G a1 a2 → co_rank a1 < co_rank a2;
 
@@ -152,7 +153,7 @@ Record hb_consistent(Σ: atomic_spec)(l: location)(v: option value)(o: op)(ω: R
     HE_e: E e;
     He_orig:
         (orig e = orig_simple o ∨ orig e = orig_rmw_read o None) ∧ v = val G.(lab) e ∨
-        ∃ r vr, orig e = orig_rmw_write o r vr /\ v = Some vr;
+        ∃ r vr, orig e = orig_rmw_write o r vr ∧ v = Some vr;
 
     E': actid → Prop;
     HE'_acts: E' ⊆₁ E;
@@ -160,10 +161,22 @@ Record hb_consistent(Σ: atomic_spec)(l: location)(v: option value)(o: op)(ω: R
     HE'_e: ¬ E' e;
     HE'_hb2: ∀ a, E a → hb G e a → ¬ E' a;
 
+    (* Expresses finiteness of E' *)
+    es'0: list actid;
+    f_es'0: actid → nat;
+    Hf_es'0: ∀ a, E' a → nth_error es'0 (f_es'0 a) = Some a;
+    Hes'0: ∀ k a, nth_error es'0 k = Some a → E' a ∧ f_es'0 a = k;
+    Hhb_es'0: ∀ a b, E' a → E' b → hb G a b → f_es'0 a < f_es'0 b;
+    Hco_es'0: ∀ a b, E' a → E' b → co G a b → f_es'0 a < f_es'0 b; (* For convenience, we pick as the canonical order one that is consistent with co. *)
+
+    (* Expresses the order of es'0 is consistent with rf *)
+
+    (* Expresses the order of es'0 is consistent with hb *)
+
     Homega: ∀ es f,
         (* es contains each element of E' exactly once *)
         (∀ a, E' a → nth_error es (f a) = Some a) →
-        (∀ k a, nth_error es k = Some a → E' a /\ f a = k) →
+        (∀ k a, nth_error es k = Some a → E' a ∧ f a = k) →
         (* the order is consistent with hb *)
         (∀ a b, E' a → E' b → hb G a b → f a < f b) →
         run Σ (Σ.(ρ0), O_RB) (flat_map (λ a, ops_of_event (tid a) (orig a) (val G.(lab) a)) es) = Some ω;

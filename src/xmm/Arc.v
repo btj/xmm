@@ -31,11 +31,10 @@ Definition post_arc o v :=
         end
       else
         None
-    | Ofence Oacq => Some (0, 1)
+    | Ofence Oacq => match v with None => Some (0, 1) | Some _ => None end
     | _ => None
     end.
 
-(*
 Inductive post_arc_: op -> option value -> RG * RL -> Prop :=
 | post_arc_fetch_add_1 n:
     post_arc_ (Ormw (Ofetch_add 1) false Xpln Orlx Orlx) (Some (S n)) (2, 0)
@@ -82,16 +81,29 @@ Proof.
       destruct ordr; try discriminate.
       destruct ordw; try discriminate.
       case_eq (Nat.eqb old (S new)); intros; rewrite H0 in H; try discriminate.
+      apply PeanoNat.Nat.eqb_eq in H0. subst.
       destruct v; try discriminate.
       destruct n; try discriminate.
-      case_eq (Nat.eqb (S n) old); intros; rewrite H1 in H; try discriminate.
-      * case_eq (Nat.eqb old 1); intros; rewrite H2 in H; try discriminate.
-        injection H; clear H; intros; subst.
-        destruct old; try discriminate.
-        constructor.
-        constructor.
-        -- constructor.
-*)
+      case_eq (Nat.eqb (S n) (S new)); intros; rewrite H0 in H; try discriminate.
+      * apply PeanoNat.Nat.eqb_eq in H0.
+        injection H0; clear H0; intros; subst.
+        case_eq (Nat.eqb (S new) 1); intros; rewrite H0 in H; try discriminate.
+        -- injection H; clear H; intros; subst.
+           apply PeanoNat.Nat.eqb_eq in H0.
+           injection H0; clear H0; intros; subst.
+           apply post_arc_cas_1.
+        -- destruct new; try discriminate.
+           injection H; clear H; intros; subst.
+           apply post_arc_cas.
+      * injection H; clear H; intros; subst.
+        apply post_arc_cas_fail.
+        apply PeanoNat.Nat.eqb_neq in H0.
+        congruence.
+  - destruct ord; try discriminate.
+    destruct v; try discriminate.
+    injection H; clear H; intros; subst.
+    apply post_arc_fence.
+Qed.
 
 Lemma post_arc_rmw_reading_0 f modw:
   post_arc (Ormw f false Xpln Orlx modw) (Some 0) = None.
@@ -114,6 +126,76 @@ Definition Σ_arc: atomic_spec := {|
     pre := pre_arc;
     post := post_arc;
 |}.
+
+Lemma upd_O_RB_0 (t: thread_id): upd O_RB t 0 = O_RB.
+Proof.
+  unfold upd, O_RB.
+  apply functional_extensionality.
+  intro t'.
+  destruct (excluded_middle_informative (t' = t)); reflexivity.
+Qed.
+
+Lemma arc_run_produces_local_resource (tid: actid → thread_id) orig lab ρ Θ:
+  ∀ es ρ0,
+  Forall (λ a, ¬ ∃ r, orig a = orig_rmw_write (Ormw (Ocas 1 0) false Xpln Orlx Orel) r 1) es →
+  run Σ_arc (ρ0, O_RB) (flat_map (λ a, ops_of_event (tid a) (orig a) (val lab a)) es) = Some (ρ, Θ) →
+  Θ = O_RB.
+Proof.
+  induction es; intros ρ0 Hfor Hrun. {
+    simpl in Hrun.
+    inversion Hrun; subst.
+    reflexivity.
+  }
+  simpl in Hrun.
+  inversion Hfor; subst.
+  clear Hfor; rename H1 into Ha; rename H2 into Hfor.
+  case_eq (orig a); intros; rewrite H in Hrun; simpl in Hrun.
+  - (* orig_simple *)
+    unfold pre_arc in Hrun.
+    
+    destruct o; try discriminate.
+    + (* Ormw *)
+      destruct f; try discriminate.
+      * (* Ofetch_add *)
+        destruct addendum; try discriminate.
+        destruct addendum; try discriminate.
+        destruct rexmod; try discriminate.
+        destruct xmod; try discriminate.
+        destruct ordr; try discriminate.
+        destruct ordw; try discriminate.
+        destruct (Nat.leb 1 ρ0); try discriminate.
+        destruct (Nat.leb 0 (O_RB (tid a))); try discriminate.
+        simpl in Hrun.
+        unfold val in Hrun.
+        destruct (lab a); try discriminate.
+        -- destruct v; try discriminate.
+           rewrite upd_O_RB_0 in Hrun.
+           apply IHes with (1:=Hfor) (2:=Hrun).
+        -- destruct v; try discriminate.
+           rewrite upd_O_RB_0 in Hrun.
+           apply IHes with (1:=Hfor) (2:=Hrun).
+      * (* Ocas *)
+        destruct rexmod; try discriminate.
+        destruct xmod; try discriminate.
+        destruct ordr; try discriminate.
+        destruct ordw; try discriminate.
+        case_eq (Nat.eqb old (S new)); intros; rewrite H0 in Hrun.
+        -- case_eq (Nat.leb 1 ρ0); intros; rewrite H1 in Hrun.
+           ++ simpl in Hrun.
+              rewrite H0 in Hrun.
+
+              
+        
+        injection Hrun; clear Hrun; intros; subst.
+        apply IHes with (ρ0 := ρ0); assumption.
+      * destruct rexmod; try discriminate.
+        destruct xmod; try discriminate.
+        destruct ordr; try discriminate.
+        destruct ordw; try discriminate.
+        case_eq (Nat.eqb old (S new)); intros; rewrite H0 in Hrun; try discriminate.
+        injection Hrun; clear Hrun; intros; subst.
+        apply IHes with (ρ0 := ρ0); assumption.
+      * apply IHes with (ρ0 := ρ0); assumption.
 
 Lemma arc_dec_reading_1_unique l ρ Θ:
   hb_consistent Σ_arc l (Some 1) (Ormw (Ocas 1 0) false Xpln Orlx Orel) (ρ, Θ) →
@@ -333,7 +415,7 @@ Proof.
         elim H0.
         exists a1.
         split.
-        - apply HE_sb_init.
+        - apply HE_hb_init.
           assumption.
         - right.
           left.
@@ -557,6 +639,24 @@ Proof.
       assumption.
   }
 
+  assert (∀ es ρ0, Forall E' es → run Σ_arc (ρ0, O_RB) (flat_map (λ a, ops_of_event (tid a) (orig a) (val G.(lab) a)) es) = Some (ρ, Θ) → Θ = O_RB). {
+    induction es.
+    - intros ρ0 Hfor Hrun.
+      simpl in Hrun.
+      inversion Hrun; subst.
+      reflexivity.
+    - intros ρ0 Hfor Hrun.
+      simpl in Hrun.
+      case_eq (orig a); intros; rewrite H in Hrun; simpl in Hrun.
+  }
+
+  apply H with (es:=es'0) (ρ0 := Σ_arc.(ρ0)).
+  - apply Forall_forall. intros.
+    apply In_nth_error in H0.
+    destruct H0 as [k H0].
+    apply Hes'0 in H0.
+    tauto.
+  - apply Homega with (f:=f_es'0); assumption.
 Admitted.
 
 Lemma arc_fence_no_global_resources l ρ Θ:
