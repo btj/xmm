@@ -190,6 +190,11 @@ From imm Require Import ProgToExecution.
    and between a begin_atomic l and an end_atomic l. *)
 Definition heap := location → option value.
 Definition atomic_heap := location → option (atomic_spec * RT).
+Definition state: Type := heap * atomic_heap.
+
+Definition h_init: heap := λ _, Some 0.
+Definition a_init: atomic_heap := λ _, None.
+Definition σ_init := (h_init, a_init).
 
 Inductive opsem_pc :=
 | AboutToExecute (pc:nat)
@@ -201,8 +206,133 @@ Record thread_cfg := {
     pc: opsem_pc;
 }.
 
+Definition tcfg_init := 
+  {| regf := RegFile.init; pc := AboutToExecute 0 |}.
+
 Record cfg := {
-    h : heap;
-    A : atomic_heap;
+    σ : state;
     T : thread_id → thread_cfg;
 }.
+
+Definition γ_init := 
+  {| σ := σ_init; T := fun t => tcfg_init |}.
+
+Section Prog.
+
+Variable prog: Prog.Prog.t.
+
+Definition instr t pc :=
+  match Basic.IdentMap.find t prog with
+  | Some instrs => nth_error instrs pc
+  | None => None
+  end.
+
+Inductive tstep: state → thread_cfg → thread_id → state → thread_cfg → Prop :=
+  tstep_assign σ regf pc t reg expr:
+    instr t pc = Some (Prog.Instr.assign reg expr) →
+    tstep
+      σ
+      {|
+        regf:=regf;
+        pc:=(AboutToExecute pc)
+      |}
+      t
+      σ
+      {|
+        regf:= Prog.RegFun.add reg (RegFile.eval_expr regf expr) regf;
+        pc:=AboutToExecute (S pc)
+      |}
+| tstep_if σ regf pc t cond pc':
+    instr t pc = Some (Prog.Instr.ifgoto cond pc') →
+    tstep
+      σ
+      {|
+        regf:=regf;
+        pc:=AboutToExecute pc
+      |}
+      t
+      σ
+      {|
+        regf:=regf;
+        pc:=AboutToExecute (if Prog.Const.eq_dec (RegFile.eval_expr regf cond) 0 then S pc else pc')
+      |}
+.
+
+Inductive step: cfg → cfg → Prop :=
+  step_intro σ T t σ' tcfg':
+    tstep σ (T t) t σ' tcfg' →
+    step (Build_cfg σ T) (Build_cfg σ' (upd T t tcfg'))
+.
+
+Definition thread_finished (γ: cfg) (t: thread_id): bool :=
+  match Basic.IdentMap.find t prog with
+    None => true
+  | Some instrs =>
+    match (γ.(T) t).(pc) with
+    | AboutToExecute pc =>
+      match nth_error instrs pc with
+      | None => true
+      | Some _ => false
+      end
+    | Executing _ => false
+    end
+  end.
+
+Definition thread_ok (γ: cfg) (t: thread_id): Prop :=
+  thread_finished γ t ∨
+  ∃ σ' tcfg', tstep γ.(σ) (γ.(T) t) t σ' tcfg'.
+
+Definition cfg_safe (γ: cfg): Prop :=
+  ∀ γ', step^* γ γ' → ∀ t, thread_ok γ t.
+
+Definition prog_safe := cfg_safe γ_init.
+
+(*
+
+[is_thread_state_trace t s trace] says that [trace] is a *finite* prefix of a trace for thread state [s].
+
+Turning this into a coinductive definition naively does not work, because a thread that goes into an infinite loop without
+performing any memory operations would have any trace.
+
+The absence of infinite traces does not matter for XMM because under XMM all executions are finite.
+
+*)
+
+Inductive is_thread_state_trace (t: thread_id): ProgToExecution.state → trace label → Prop :=
+| is_thread_trace_nil s: is_thread_state_trace t s (trace_fin [])
+| is_thread_trace_nonnil lbls s s' trace:
+  istep t lbls s s' →
+  is_thread_state_trace t s' trace →
+  is_thread_state_trace t s (trace_app (trace_fin (List.rev lbls)) trace).
+
+(* The given trace is a finite prefix of a trace for the given thread. *)
+Definition is_thread_trace t trace :=
+  match Basic.IdentMap.find t prog with
+    None => trace = trace_fin []
+  | Some instrs =>
+    is_thread_state_trace t (init instrs) trace
+  end.
+
+(*
+
+The program has the given execution.
+
+Note: the execution is not necessarily complete, in the sense that some threads may not yet have finished.
+
+*)
+
+Definition prog_has_xc20_execution (G: execution): Prop :=
+  ∃ threads sc0 sc',
+    (xmm_step_trace is_thread_trace)^* {| WCore.G:=WCore.init_exec threads; WCore.sc:=sc0 |} {| WCore.G:=G; WCore.sc:=sc' |}.
+
+Definition is_race G a1 a2 := race_mod G Opln a1 a2.
+
+Theorem safe_programs_have_no_races:
+  ∀ G,
+  prog_safe →
+  prog_has_xc20_execution G →
+  ∀ a1 a2, ~ is_race G a1 a2.
+Proof.
+Admitted.
+
+End Prog.
