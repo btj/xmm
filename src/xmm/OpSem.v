@@ -176,10 +176,6 @@ Record hb_consistent(Σ: atomic_spec)(t: thread_id)(l: location)(v: option value
     Hhb_es'0: ∀ a b, E' a → E' b → hb G a b → f_es'0 a < f_es'0 b;
     Hco_es'0: ∀ a b, E' a → E' b → co G a b → f_es'0 a < f_es'0 b; (* For convenience, we pick as the canonical order one that is consistent with co. *)
 
-    (* Expresses the order of es'0 is consistent with rf *)
-
-    (* Expresses the order of es'0 is consistent with hb *)
-
     Homega: ∀ es f,
         (* es contains each element of E' exactly once *)
         (∀ a, E' a → nth_error es (f a) = Some a) →
@@ -265,10 +261,6 @@ Record grounding_consistent(Σ: atomic_spec)(t: thread_id)(l: location)(v: optio
     Hes'0: ∀ k a, nth_error es'0 k = Some a → E' a ∧ f_es'0 a = k;
     Hhb_es'0: ∀ a b, E' a → E' b → hb G a b → f_es'0 a < f_es'0 b;
     Hco_es'0: ∀ a b, E' a → E' b → co G a b → f_es'0 a < f_es'0 b; (* For convenience, we pick as the canonical order one that is consistent with co. *)
-
-    (* Expresses the order of es'0 is consistent with rf *)
-
-    (* Expresses the order of es'0 is consistent with hb *)
 
     Homega: ∀ es f,
         (* es contains each element of E' exactly once *)
