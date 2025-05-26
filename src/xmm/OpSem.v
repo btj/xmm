@@ -189,8 +189,104 @@ Record hb_consistent(Σ: atomic_spec)(t: thread_id)(l: location)(v: option value
         run Σ (Σ.(ρ0), O_RB) (flat_map (λ a, ops_of_event (tid a) (orig a) (val G.(lab) a)) es) = Some ω;
 }.
 
+Module Gr.
+
+Record grounding_consistent(Σ: atomic_spec)(t: thread_id)(l: location)(v: option value)(o: op)(ω: RT) :=
+{
+    G: execution;
+    HG_Wf: Wf G;
+    HG_cons: WCore.is_cons G;
+    HG_rf_complete: complete G;
+
+    init: actid;
+    Hinit_acts: G.(acts_set) init;
+    Hinit_loc: loc G.(lab) init = Some l;
+    Hinit_is_w: is_w G.(lab) init;
+    Hinit_mod: mod G.(lab) init = Opln;
+    Hinit_val: val G.(lab) init = Some Σ.(v0);
+
+    E: actid → Prop;
+    HE_acts: E ⊆₁ G.(acts_set);
+    HE_loc: ∀ a, E a → loc G.(lab) a = None ∨ loc G.(lab) a = Some l;
+    HE_hb_init: ∀ a, E a → hb G init a;
+    HE_rf_complete: ∀ a b, E b → rf G a b → a = init ∨ E a;
+
+    (* Expresses well-foundedness of co within E *)
+    co_rank: actid -> nat;
+    Hco_rank_co: ∀ a1 a2, E a1 → E a2 → co G a1 a2 → co_rank a1 < co_rank a2;
+
+    e: actid;
+    orig: actid → event_origin;
+
+    HE_e: E e;
+    He_tid: tid e = t;
+    He_orig:
+        (orig e = orig_simple o ∨ orig e = orig_rmw_read o None) ∧ v = val G.(lab) e ∨
+        ∃ r vr, orig e = orig_rmw_write o r vr ∧ v = Some vr;
+
+    Hlab_matches_orig: ∀ a, E a → label_matches_origin (G.(lab) a) (orig a);
+    Horig_simple: ∀ a o,
+        E a → orig a = orig_simple o →
+        a ≠ e → Σ.(post) o (val G.(lab) a) <> None;
+    Horig_rmw_read_None: ∀ a f rexmod xmod ordr ordw v,
+        orig a = orig_rmw_read (Ormw f rexmod xmod ordr ordw) None →
+        E a → a ≠ e →
+        val G.(lab) a = Some v →
+        eval_f_rmw f v = None ∧
+        (a ≠ e → Σ.(post) (Ormw f rexmod xmod ordr ordw) (Some v) <> None);
+    Horig_rmw_read_Some: ∀ a f rexmod xmod ordr ordw v0 v1 w,
+        orig a = orig_rmw_read (Ormw f rexmod xmod ordr ordw) (Some w) →
+        E a →
+        E w →
+        val G.(lab) a = Some v0 →
+        val G.(lab) w = Some v1 →
+        orig w = orig_rmw_write (Ormw f rexmod xmod ordr ordw) a v0 ∧
+        eval_f_rmw f v0 = Some v1 ∧
+        rmw G a w;
+    Horig_rmw_write: ∀ a f rexmod xmod ordr ordw r vr,
+        orig a = orig_rmw_write (Ormw f rexmod xmod ordr ordw) r vr →
+        E a →
+        E r ∧
+        orig r = orig_rmw_read (Ormw f rexmod xmod ordr ordw) (Some a) ∧
+        rmw G r a ∧
+        (a ≠ e → Σ.(post) (Ormw f rexmod xmod ordr ordw) (Some vr) <> None);
+
+    E': actid → Prop;
+    HE'_acts: E' ⊆₁ E;
+    HE'_hb1: ∀a, E a → hb G a e → E' a;
+    HE'_rel: ∀a, E a → is_rel G.(lab) a → E' a;
+    HE'_e: ¬ E' e;
+    HE'_hb2: ∀ a, E a → hb G e a → ¬ E' a;
+
+    (* Expresses finiteness of E' *)
+    es'0: list actid;
+    f_es'0: actid → nat;
+    Hf_es'0: ∀ a, E' a → nth_error es'0 (f_es'0 a) = Some a;
+    Hes'0: ∀ k a, nth_error es'0 k = Some a → E' a ∧ f_es'0 a = k;
+    Hhb_es'0: ∀ a b, E' a → E' b → hb G a b → f_es'0 a < f_es'0 b;
+    Hco_es'0: ∀ a b, E' a → E' b → co G a b → f_es'0 a < f_es'0 b; (* For convenience, we pick as the canonical order one that is consistent with co. *)
+
+    (* Expresses the order of es'0 is consistent with rf *)
+
+    (* Expresses the order of es'0 is consistent with hb *)
+
+    Homega: ∀ es f,
+        (* es contains each element of E' exactly once *)
+        (∀ a, E' a → nth_error es (f a) = Some a) →
+        (∀ k a, nth_error es k = Some a → E' a ∧ f a = k) →
+        (* the order is consistent with hb *)
+        (∀ a b, E' a → E' b → hb G a b → f a < f b) →
+        run Σ (Σ.(ρ0), O_RB) (flat_map (λ a, ops_of_event (tid a) (orig a) (val G.(lab) a)) es) = Some ω;
+}.
+
+End Gr.
+
 Definition atomic_spec_pre_sufficient (Σ: atomic_spec)(o: op): Prop :=
-  False. (* TODO: Weaken. For now, we consider programs with plain accesses only. *)
+  match Σ.(pre) o with
+  | None => True
+  | Some (ρ, θ) => ∀ t l v ω, Gr.grounding_consistent Σ t l v o (compose ω (ρ, upd O_RB t θ)) →
+    Σ.(post) o v <> None
+  end.
 
 Definition is_valid_atomic_spec (Σ: atomic_spec): Prop :=
   (∀ mod, Σ.(pre) (Ofence mod) = Some (0, 0)) ∧
@@ -388,6 +484,78 @@ Inductive tstep: state → thread_cfg → thread_id → state → thread_cfg →
         h:=upd σ.(h) (RegFile.eval_lexpr regf l) (Some (RegFile.eval_expr regf rhs));
         A:=upd σ.(A) (RegFile.eval_lexpr regf l) None
       |}
+      {|
+        regf:=regf;
+        pc:=AboutToExecute (S pc)
+      |}
+| tstep_load_stutter σ regf pc t ord lhs l Σ ω ρ_pre θ_pre ω_frame:
+    instr t pc = Some (Prog.Instr.load ord lhs l) →
+    σ.(A) (RegFile.eval_lexpr regf l) = Some (Σ, ω) →
+    Σ.(pre) (Oload ord) = Some (ρ_pre, θ_pre) →
+    ω = compose ω_frame (ρ_pre, upd O_RB t θ_pre) →
+    tstep
+      σ
+      {|
+        regf:=regf;
+        pc:=AboutToExecute pc
+      |}
+      t
+      σ
+      {|
+        regf:=regf;
+        pc:=AboutToExecute pc
+      |}
+| tstep_load σ regf pc t ord lhs l Σ ω ρ_pre θ_pre ω_frame v ρ_post θ_post:
+    instr t pc = Some (Prog.Instr.load ord lhs l) →
+    σ.(A) (RegFile.eval_lexpr regf l) = Some (Σ, ω) →
+    Σ.(pre) (Oload ord) = Some (ρ_pre, θ_pre) →
+    ω = compose ω_frame (ρ_pre, upd O_RB t θ_pre) →
+    Σ.(post) (Oload ord) (Some v) = Some (ρ_post, θ_post) →
+    hb_consistent Σ t (RegFile.eval_lexpr regf l) (Some v) (Oload ord) ω →
+    tstep
+      σ
+      {|
+        regf:=regf;
+        pc:=AboutToExecute pc
+      |}
+      t
+      (with_atomic_heap σ (upd σ.(A) (RegFile.eval_lexpr regf l) (Some (Σ, compose ω_frame (ρ_post, upd O_RB t θ_post)))))
+      {|
+        regf:=Prog.RegFun.add lhs v regf;
+        pc:=AboutToExecute (S pc)
+      |}
+| tstep_store_stutter σ regf pc t ord l rhs Σ ω ρ_pre θ_pre ω_frame:
+    instr t pc = Some (Prog.Instr.store ord l rhs) →
+    σ.(A) (RegFile.eval_lexpr regf l) = Some (Σ, ω) →
+    Σ.(pre) (Ostore ord (RegFile.eval_expr regf rhs)) = Some (ρ_pre, θ_pre) →
+    ω = compose ω_frame (ρ_pre, upd O_RB t θ_pre) →
+    tstep
+      σ
+      {|
+        regf:=regf;
+        pc:=AboutToExecute pc
+      |}
+      t
+      σ
+      {|
+        regf:=regf;
+        pc:=AboutToExecute pc
+      |}
+| tstep_store σ regf pc t ord l rhs Σ ω ρ_pre θ_pre ω_frame ρ_post θ_post:
+    instr t pc = Some (Prog.Instr.store ord l rhs) →
+    σ.(A) (RegFile.eval_lexpr regf l) = Some (Σ, ω) →
+    Σ.(pre) (Ostore ord (RegFile.eval_expr regf rhs)) = Some (ρ_pre, θ_pre) →
+    ω = compose ω_frame (ρ_pre, upd O_RB t θ_pre) →
+    Σ.(post) (Ostore ord (RegFile.eval_expr regf rhs)) None = Some (ρ_post, θ_post) →
+    hb_consistent Σ t (RegFile.eval_lexpr regf l) None (Ostore ord (RegFile.eval_expr regf rhs)) ω →
+    tstep
+      σ
+      {|
+        regf:=regf;
+        pc:=AboutToExecute pc
+      |}
+      t
+      (with_atomic_heap σ (upd σ.(A) (RegFile.eval_lexpr regf l) (Some (Σ, compose ω_frame (ρ_post, upd O_RB t θ_post)))))
       {|
         regf:=regf;
         pc:=AboutToExecute (S pc)
