@@ -103,6 +103,17 @@ Fixpoint run(Σ: atomic_spec)(ω0: RT)(es: list (thread_id * (op * option value)
         end
     end.
 
+Inductive event_op ev orig o v :=
+| event_op_simple
+    (HORIG: orig = orig_simple o)
+    (HV: v = ev)
+| event_op_rmw_fail
+    (HORIG: orig = orig_rmw_read o None)
+    (HV: v = ev)
+| event_op_rmw r vr
+    (HORIG: orig = orig_rmw_write o r vr)
+    (HV: v = Some vr).
+
 Record hb_consistent(Σ: atomic_spec)(t: thread_id)(l: location)(v: option value)(o: op)(ω: RT) :=
 {
     G: execution;
@@ -158,9 +169,7 @@ Record hb_consistent(Σ: atomic_spec)(t: thread_id)(l: location)(v: option value
     e: actid;
     HE_e: E e;
     He_tid: tid e = t;
-    He_orig:
-        (orig e = orig_simple o ∨ orig e = orig_rmw_read o None) ∧ v = val G.(lab) e ∨
-        ∃ r vr, orig e = orig_rmw_write o r vr ∧ v = Some vr;
+    He_orig: event_op (val G.(lab) e) (orig e) o v;
 
     E': actid → Prop;
     HE'_acts: E' ⊆₁ E;
@@ -216,9 +225,7 @@ Record grounding_consistent(Σ: atomic_spec)(t: thread_id)(l: location)(v: optio
 
     HE_e: E e;
     He_tid: tid e = t;
-    He_orig:
-        (orig e = orig_simple o ∨ orig e = orig_rmw_read o None) ∧ v = val G.(lab) e ∨
-        ∃ r vr, orig e = orig_rmw_write o r vr ∧ v = Some vr;
+    He_orig: event_op (val G.(lab) e) (orig e) o v;
 
     Hlab_matches_orig: ∀ a, E a → label_matches_origin (G.(lab) a) (orig a);
     Horig_simple: ∀ a o,
@@ -687,6 +694,56 @@ Definition prog_has_xc20_execution (G: execution): Prop :=
     (xmm_step_trace is_thread_trace)^* {| WCore.G:=WCore.init_exec threads; WCore.sc:=sc0 |} {| WCore.G:=G; WCore.sc:=sc' |}.
 
 Definition is_race G a1 a2 := a1 ≠ a2 ∧ race_mod G Opln a1 a2.
+
+(* Soundness proof *)
+
+Section Grounded.
+
+Variable G: execution.
+Variable event_annot: actid -> annotation.
+Variable orig: actid -> event_origin.
+
+Definition is_atomic_access_of(l: location)(e: actid): Prop :=
+  acts_set G e ∧
+  is_rlx G.(lab) e ∧
+  loc G.(lab) e = Some l.
+
+Definition is_begin_atomic(l: location)(e: actid)(Σ: atomic_spec): Prop :=
+  loc G.(lab) e = Some l ∧
+  is_w G.(lab) e ∧
+  mod G.(lab) e = Opln ∧
+  event_annot e = BeginAtomic Σ.
+
+Inductive is_enabled(Σ: atomic_spec)(e: actid): Prop :=
+  is_enabled_intro o v
+    (HOP: event_op (val G.(lab) e) (orig e) o v)
+    (HSIGMA: Σ.(post) o v <> None).
+
+Definition access_grounded_wrt(l: location)(e0: actid)(e: actid): Prop :=
+  ∃ Σ,
+  is_begin_atomic l e0 Σ ∧
+  ∀ e', (rf G ∪ rmw G)^* e' e → mod G.(lab) e' = Opln ∨ is_enabled Σ e'.
+
+Definition access_grounded(l: location)(e: actid): Prop :=
+  ∃ e0, hb G e0 e ∧ access_grounded_wrt l e0 e ∧
+  ∀ e0', hb G e0' e → is_w G.(lab) e0' → mod G.(lab) e0' = Opln → (hb G)^? e0' e0.
+
+Definition exec_grounded: Prop :=
+  ∀ l e, is_atomic_access_of l e → access_grounded l e.
+
+Definition access_weakly_grounded(gr: actid → actid → Prop)(l: location)(e: actid): Prop :=
+  (∃ e0, gr e0 e ∧ access_grounded_wrt l e0 e ∧
+   (∀ e0', gr e0' e → is_w G.(lab) e0' → mod G.(lab) e0' = Opln → (gr)^? e0' e0)) ∨
+  (∀ e', ((rf G ∪ rmw G)^+ ⨾ gr^?) e' e → is_rel G.(lab) e' → gr e' e) ∧
+  (∀ e', rf G e' e → gr e' e).
+
+Definition exec_weakly_grounded: Prop :=
+  ∃ gr,
+  is_total (acts_set G) gr ∧
+  hb G ⊆ gr ∧
+  ∀ l e, is_atomic_access_of l e → access_weakly_grounded gr l e.
+
+End Grounded.
 
 Theorem safe_programs_have_no_races:
   ∀ G,

@@ -579,21 +579,24 @@ Proof.
 
   assert (He_orig': ∃ re, orig e = orig_rmw_write (Ormw (Ocas 1 0) false Xpln Orlx Orel) re 1). {
     pose proof (Hlab_matches_orig e HE_e).
-    destruct He_orig.
-    * destruct H0.
-      destruct H0;
-      rewrite H0 in H;
+    inversion He_orig.
+    * rewrite HORIG in H;
       inversion H; subst.
-      eapply Horig_rmw_read_None in H0; try eassumption. 2:{
+    * rewrite HORIG in H;
+      inversion H; subst.
+      eapply Horig_rmw_read_None in HORIG; try eassumption. 2:{
+          unfold val.
           rewrite <- H1.
           reflexivity.
       }
-      destruct H0.
+      destruct HORIG.
+      unfold val in HV.
+      rewrite <- H1 in HV.
+      injection HV; clear HV; intros; subst.
       discriminate.
-    * destruct H0 as [re [vre [Horig_re Heval]]].
-      rewrite Horig_re in H.
+    * rewrite HORIG in H.
       inversion H; subst.
-      exists re. congruence.
+      exists r. congruence.
   }
   destruct He_orig' as [re Horig'].
 
